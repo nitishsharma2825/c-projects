@@ -1,8 +1,8 @@
 build: src/hash_table.c src/main.c
-	gcc -Wall src/hash_table.c src/main.c -o build/main -lm
+	gcc -Wall src/hash_table.c src/main.c -o main -lm
 
 run: build
-	./build/main
+	./main
 
 clean:
-	rm -rf build/main
+	rm -rf ./main
