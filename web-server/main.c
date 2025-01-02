@@ -9,10 +9,27 @@
 #include <unistd.h>
 
 #define LISTENQ  1024  /* Second argument to listen() */
+#define	MAXLINE	 8192  /* Max text line length */
+#define MAXBUF   8192  /* Max I/O buffer size */
+
+#define RIO_BUFSIZE 8192
+typedef struct
+{
+    int rio_fd;                /* Descriptor for this internal buf */
+    int rio_cnt;               /* Unread bytes in internal buf */
+    char* rio_bufptr;          /* Next unread byte in internal buffer */
+    char rio_buf[RIO_BUFSIZE]; /* Internal buffer*/
+} rio_t;
 
 void unix_error(char* msg)
 {
     fprintf(stderr, "%s: %s\n", msg, strerror(errno));
+    exit(0);
+}
+
+void app_error(char* msg)
+{
+    fprintf(stderr, "%s\n", msg);
     exit(0);
 }
 
@@ -143,4 +160,152 @@ int open_listenfd(char *port)
     }
     
     return listenfd;
+}
+
+/* Robustly write n bytes (unbuffered) */
+ssize_t rio_writen(int fd, void* userbuf, size_t n)
+{
+    size_t nleft = n;
+    ssize_t nwritten;
+    char* bufp = userbuf;
+
+    while (nleft > 0)
+    {
+        if (nwritten = write(fd, bufp, nleft) <= 0)
+        {
+            if (errno == EINTR)     /* Interrupted by sig handler*/
+            {
+                nwritten = 0;
+            } else {
+                return -1;          /* errno set by write() */
+            }
+        }
+        nleft -= nwritten;
+        bufp += nwritten;
+    }
+    return n;
+}
+
+/* Robustly read a text line (buffered)*/
+ssize_t rio_readlineb(rio_t* rp, void* userbuf, size_t maxlen)
+{
+    int n, rc;
+    char c, *bufp = userbuf;
+
+    for (n = 1; n < maxlen; n++)
+    {
+        /* TODO: write rio_read */
+        if ((rc = rio_read(rp, &c, 1)) == 1)
+        {
+            *bufp++ = c;
+            if (c == '\n')
+            {
+                n++;
+                break;
+            }
+        } else if (rc == 0) {
+            if (n == 1)
+            {
+                return 0; /* EOF, no data read*/
+            } else {
+                break;    /* EOF, some data was read */
+            }
+        } else {
+            return -1;    /* Error */
+        }
+    }
+    *bufp = 0;
+    return n-1;
+}
+
+void rio_readinitb(rio_t* rp, int fd)
+{
+    rp->rio_fd = fd;
+    rp->rio_cnt = 0;
+    rp->rio_bufptr = rp->rio_buf;
+}
+
+int Open_clientfd(char* hostname, char* port)
+{
+    int rc;
+
+    if ((rc = open_cliendfd(hostname, port)) < 0)
+    {
+        unix_error("Open_clientfd error");
+    }
+    return rc;  
+}
+
+int Open_listenfd(char* port)
+{
+    int rc;
+
+    if ((rc = open_listenfd(port)) < 0)
+    {
+        unix_error("Open_listenfd error");
+    }
+    return rc;
+}
+
+void Rio_readinitb(rio_t* rp, int fd)
+{
+    rio_readinitb(rp, fd);
+}
+
+void Rio_writen(int fd, void* userbuf, size_t n)
+{
+    if (rio_writen(fd, userbuf, n) != n)
+    {
+        unix_error("Rio_writen error");
+    }
+}
+
+ssize_t Rio_readlineb(rio_t* rp, void* userbuf, size_t maxlen)
+{
+    ssize_t rc;
+
+    if ((rc = rio_readlineb(rp, userbuf, maxlen)) < 0)
+    {
+        unix_error("Rio_readlineb error");
+    }
+    return rc;
+}
+
+char* Fgets(char* ptr, int n, FILE* stream)
+{
+    char* rptr;
+
+    if (((rptr = fgets(ptr, n, stream)) == NULL) && ferror(stream))
+    {
+        app_error("Fgets error");
+    }
+    return rptr;
+}
+
+int main(int argc, char** argv)
+{
+    int clientfd;
+
+    char* host, *port, buf[MAXLINE];
+    rio_t rio;
+
+    if (argc != 3)
+    {
+        fprintf(stderr, "usage: %s <host> <port>\n", argv[0]);
+        exit(0);
+    }
+    host = argv[1];
+    port = argv[2];
+
+    clientfd = Open_clientfd(host, port);
+    Rio_readinitb(&rio, clientfd);
+
+    while (Fgets(buf, MAXLINE, stdin) != NULL)
+    {
+        Rio_writen(clientfd, buf, strlen(buf));
+        Rio_readlineb(&rio, buf, MAXLINE);
+        Fputs(buf, stdout);
+    }
+    Close(clientfd);
+    exit(0);
 }
